@@ -37,7 +37,7 @@ export async function signUp(
 
   const originHeader = (await headers()).get("origin");
   const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
+  const { data, error } = await supabase.auth.signUp({
     email,
     password,
     options: {
@@ -48,6 +48,10 @@ export async function signUp(
 
   if (error) {
     return { error: "登録に失敗しました。時間をおいて再度お試しください。" };
+  }
+
+  if (data.session) {
+    redirect("/dashboard");
   }
 
   return { error: null, success: true };
