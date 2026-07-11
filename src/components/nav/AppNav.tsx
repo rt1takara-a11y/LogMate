@@ -8,6 +8,7 @@ import {
   MessageCircle,
   FileText,
   Users,
+  Heart,
   ListChecks,
   Settings,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { href: "/chat", label: "AIチャット", icon: MessageCircle },
   { href: "/reports", label: "レポート", icon: FileText },
   { href: "/staff", label: "スタッフ", icon: Users },
+  { href: "/customers", label: "常連客", icon: Heart },
   { href: "/todos", label: "TODO", icon: ListChecks },
   { href: "/settings", label: "設定", icon: Settings },
 ];

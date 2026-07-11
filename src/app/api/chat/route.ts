@@ -8,6 +8,7 @@ import {
   searchLogsByKeyword,
   getOpenTodos,
   getStaffSummaries,
+  getCustomerSummaries,
   getLatestReport,
 } from "@/lib/rag/retrieve";
 import { buildChatPrompt } from "@/lib/rag/prompt";
@@ -60,12 +61,13 @@ export async function POST(request: NextRequest) {
     content: row.content,
   }));
 
-  const [recentLogs, keywordLogs, openTodos, staff, latestWeeklyReport] =
+  const [recentLogs, keywordLogs, openTodos, staff, customers, latestWeeklyReport] =
     await Promise.all([
       getRecentLogs(supabase, 20),
       searchLogsByKeyword(supabase, message),
       getOpenTodos(supabase),
       getStaffSummaries(supabase),
+      getCustomerSummaries(supabase),
       getLatestReport(supabase, "weekly"),
     ]);
 
@@ -74,6 +76,7 @@ export async function POST(request: NextRequest) {
     keywordLogs,
     openTodos,
     staff,
+    customers,
     latestReportSummary: latestWeeklyReport
       ? JSON.stringify(latestWeeklyReport.content)
       : null,

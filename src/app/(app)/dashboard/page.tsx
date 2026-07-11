@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { DailyReportContent } from "@/lib/reports/types";
+import { LogCalendar } from "@/components/dashboard/LogCalendar";
+import { InsightsCard } from "./InsightsCard";
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -16,7 +17,13 @@ function startOfWeekString() {
   return monday.toISOString().slice(0, 10);
 }
 
-export default async function DashboardPage() {
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string }>;
+}) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -26,12 +33,21 @@ export default async function DashboardPage() {
   const today = todayString();
   const weekStart = startOfWeekString();
 
+  const { month: monthQuery } = await searchParams;
+  const monthParam = monthQuery && MONTH_RE.test(monthQuery) ? monthQuery : today.slice(0, 7);
+  const monthStart = `${monthParam}-01`;
+  const monthEndDate = new Date(`${monthStart}T00:00:00Z`);
+  monthEndDate.setUTCMonth(monthEndDate.getUTCMonth() + 1);
+  monthEndDate.setUTCDate(0);
+  const monthEnd = monthEndDate.toISOString().slice(0, 10);
+
   const [
     { data: todayLog },
     { count: weekLogCount },
     { data: openTodos },
     { data: recentLogs },
-    { data: latestDailyReport },
+    { data: monthLogs },
+    { data: latestInsights },
   ] = await Promise.all([
     supabase
       .from("logs")
@@ -60,18 +76,22 @@ export default async function DashboardPage() {
       .order("log_date", { ascending: false })
       .limit(5),
     supabase
-      .from("reports")
-      .select("content")
+      .from("logs")
+      .select("log_date")
       .eq("user_id", user.id)
-      .eq("report_type", "daily")
-      .order("period_start", { ascending: false })
+      .gte("log_date", monthStart)
+      .lte("log_date", monthEnd),
+    supabase
+      .from("ai_insights")
+      .select("insights, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
   ]);
 
-  const advice = (latestDailyReport?.content as DailyReportContent | undefined)
-    ?.adviceForTomorrow;
   const recentInsights = (recentLogs ?? []).filter((log) => log.insights);
+  const logDates = new Set((monthLogs ?? []).map((l) => l.log_date));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -80,6 +100,15 @@ export default async function DashboardPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           {today} 今日も一日お疲れさまでした。
         </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <InsightsCard
+          insights={(latestInsights?.insights as string[] | undefined) ?? null}
+          generatedAt={latestInsights?.created_at ? latestInsights.created_at.slice(0, 10) : null}
+        />
+
+        <LogCalendar monthParam={monthParam} logDates={logDates} today={today} />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -108,13 +137,6 @@ export default async function DashboardPage() {
         </Card>
 
         <Card>
-          <CardLabel>AIからの一言</CardLabel>
-          <p className="text-sm text-foreground">
-            {advice ?? "レポートを生成すると、ここにAIからのアドバイスが表示されます。"}
-          </p>
-        </Card>
-
-        <Card>
           <CardLabel>今週のログ数</CardLabel>
           <p className="text-2xl font-semibold text-foreground">
             {weekLogCount ?? 0}
@@ -132,9 +154,7 @@ export default async function DashboardPage() {
             から生成できます。
           </p>
         </Card>
-      </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardLabel>最近のTODO</CardLabel>
           {openTodos && openTodos.length > 0 ? (
@@ -152,25 +172,25 @@ export default async function DashboardPage() {
             すべて見る
           </Link>
         </Card>
-
-        <Card>
-          <CardLabel>最近の気付き</CardLabel>
-          {recentInsights.length > 0 ? (
-            <ul className="space-y-2 text-sm text-foreground">
-              {recentInsights.map((log) => (
-                <li key={log.log_date}>
-                  <span className="mr-2 text-xs text-muted-foreground">
-                    {log.log_date}
-                  </span>
-                  {log.insights}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-muted-foreground">まだ気付きの記録がありません。</p>
-          )}
-        </Card>
       </div>
+
+      <Card>
+        <CardLabel>最近の気付き</CardLabel>
+        {recentInsights.length > 0 ? (
+          <ul className="space-y-2 text-sm text-foreground">
+            {recentInsights.map((log) => (
+              <li key={log.log_date}>
+                <span className="mr-2 text-xs text-muted-foreground">
+                  {log.log_date}
+                </span>
+                {log.insights}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">まだ気付きの記録がありません。</p>
+        )}
+      </Card>
     </div>
   );
 }

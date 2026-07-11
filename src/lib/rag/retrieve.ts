@@ -100,6 +100,33 @@ export async function getStaffSummaries(supabase: SupabaseClient) {
   return data ?? [];
 }
 
+export async function getCustomerSummaries(supabase: SupabaseClient, limit = 30) {
+  const { data: customers } = await supabase
+    .from("customers")
+    .select("id, name, profile_notes, visit_pattern, last_visit_date")
+    .order("last_visit_date", { ascending: false, nullsFirst: false })
+    .limit(limit);
+
+  if (!customers || customers.length === 0) return [];
+
+  const { data: notes } = await supabase
+    .from("customer_notes")
+    .select("customer_id, visit_date, note")
+    .in(
+      "customer_id",
+      customers.map((c) => c.id),
+    )
+    .order("visit_date", { ascending: false });
+
+  return customers.map((customer) => ({
+    ...customer,
+    notes: (notes ?? [])
+      .filter((n) => n.customer_id === customer.id)
+      .slice(0, 5)
+      .map((n) => ({ visitDate: n.visit_date, note: n.note })),
+  }));
+}
+
 export async function getLatestReport(
   supabase: SupabaseClient,
   reportType: "daily" | "weekly" | "monthly",
