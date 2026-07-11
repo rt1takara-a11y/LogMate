@@ -1,10 +1,12 @@
 import type { AiProvider, GenerateOptions } from "./types";
 import { openaiClient } from "./openai";
 import { anthropicClient } from "./anthropic";
+import { googleClient } from "./google";
 
 const CLIENTS = {
   openai: openaiClient,
   anthropic: anthropicClient,
+  google: googleClient,
 } as const;
 
 export function generateChatCompletion(

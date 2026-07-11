@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { saveAiSettings } from "./actions";
 import type { AiProvider } from "@/lib/ai/types";
+import { DEFAULT_MODELS } from "@/lib/ai/constants";
 
 export function SettingsForm({
   currentProvider,
@@ -40,7 +41,7 @@ export function SettingsForm({
           AI provider
         </span>
         <div className="flex gap-2">
-          {(["anthropic", "openai"] as const).map((option) => (
+          {(["anthropic", "openai", "google"] as const).map((option) => (
             <button
               key={option}
               type="button"
@@ -51,7 +52,11 @@ export function SettingsForm({
                   : "border-border text-muted-foreground"
               }`}
             >
-              {option === "anthropic" ? "Claude (Anthropic)" : "OpenAI"}
+              {option === "anthropic"
+                ? "Claude (Anthropic)"
+                : option === "openai"
+                  ? "OpenAI"
+                  : "Gemini (Google)"}
             </button>
           ))}
         </div>
@@ -64,7 +69,7 @@ export function SettingsForm({
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder={provider === "anthropic" ? "claude-3-5-haiku-latest" : "gpt-4o-mini"}
+          placeholder={DEFAULT_MODELS[provider]}
           className="w-full rounded-lg border border-border bg-card px-3 py-2 text-foreground outline-none focus:border-primary"
         />
       </label>
