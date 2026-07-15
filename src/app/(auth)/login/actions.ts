@@ -57,6 +57,52 @@ export async function signUp(
   return { error: null, success: true };
 }
 
+export async function requestPasswordReset(
+  _prevState: AuthActionState,
+  formData: FormData,
+): Promise<AuthActionState> {
+  const email = String(formData.get("email") ?? "");
+  if (!email) {
+    return { error: "メールアドレスを入力してください。" };
+  }
+
+  const originHeader = (await headers()).get("origin");
+  const supabase = await createClient();
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${originHeader}/auth/callback?next=/reset-password`,
+  });
+
+  // Always report success so we don't reveal whether an account exists.
+  return { error: null, success: true };
+}
+
+export async function updatePassword(
+  _prevState: AuthActionState,
+  formData: FormData,
+): Promise<AuthActionState> {
+  const password = String(formData.get("password") ?? "");
+  if (password.length < 8) {
+    return { error: "パスワードは8文字以上にしてください。" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      error: "セッションの有効期限が切れています。もう一度お試しください。",
+    };
+  }
+
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) {
+    return { error: "パスワードの更新に失敗しました。" };
+  }
+
+  redirect("/dashboard");
+}
+
 export async function signInWithGoogle() {
   const originHeader = (await headers()).get("origin");
   const supabase = await createClient();

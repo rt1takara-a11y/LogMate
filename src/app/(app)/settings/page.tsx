@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SettingsForm } from "./SettingsForm";
+import { AccountSection } from "./AccountSection";
 import type { AiProvider } from "@/lib/ai/types";
 
 export default async function SettingsPage() {
@@ -29,6 +30,13 @@ export default async function SettingsPage() {
         currentModel={settings?.model ?? null}
         hasKeyConfigured={Boolean(settings)}
       />
+
+      <div className="border-t border-border pt-6">
+        <h2 className="mb-4 text-base font-medium text-foreground">
+          データ管理
+        </h2>
+        <AccountSection />
+      </div>
     </div>
   );
 }

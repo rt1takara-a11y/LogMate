@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import { signIn, signUp, signInWithGoogle, type AuthActionState } from "./actions";
 
@@ -64,6 +65,12 @@ export function LoginForm() {
           >
             {signInPending ? "ログイン中…" : "ログイン"}
           </button>
+          <Link
+            href="/forgot-password"
+            className="block text-center text-xs text-muted-foreground hover:text-foreground"
+          >
+            パスワードをお忘れの方
+          </Link>
         </form>
       ) : signUpState.success ? (
         <p className="rounded-xl bg-muted p-4 text-sm text-foreground">
@@ -106,6 +113,18 @@ export function LoginForm() {
           Googleでログイン
         </button>
       </form>
+
+      <p className="text-center text-xs text-muted-foreground">
+        続行することで、
+        <Link href="/terms" className="underline hover:text-foreground">
+          利用規約
+        </Link>
+        と
+        <Link href="/privacy" className="underline hover:text-foreground">
+          プライバシーポリシー
+        </Link>
+        に同意したものとみなされます。
+      </p>
     </div>
   );
 }
