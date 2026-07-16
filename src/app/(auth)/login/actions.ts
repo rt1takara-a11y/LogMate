@@ -103,21 +103,6 @@ export async function updatePassword(
   redirect("/dashboard");
 }
 
-export async function signInWithGoogle() {
-  const originHeader = (await headers()).get("origin");
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: `${originHeader}/auth/callback` },
-  });
-
-  if (error || !data.url) {
-    redirect("/login?error=google");
-  }
-
-  redirect(data.url);
-}
-
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();

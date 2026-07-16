@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useActionState, useState } from "react";
-import { signIn, signUp, signInWithGoogle, type AuthActionState } from "./actions";
+import { signIn, signUp, type AuthActionState } from "./actions";
 
 const initialState: AuthActionState = { error: null };
 
@@ -98,21 +98,6 @@ export function LoginForm() {
           </button>
         </form>
       )}
-
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span className="h-px flex-1 bg-border" />
-        または
-        <span className="h-px flex-1 bg-border" />
-      </div>
-
-      <form action={signInWithGoogle}>
-        <button
-          type="submit"
-          className="w-full rounded-full border border-border bg-card py-2.5 text-sm font-medium text-foreground"
-        >
-          Googleでログイン
-        </button>
-      </form>
 
       <p className="text-center text-xs text-muted-foreground">
         続行することで、
