@@ -1,6 +1,6 @@
-# [Project name]
+# Logmate
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Noah's Nalogの店舗オーナーが、日々の記録を端末内で蓄積し、傾向・判断・方針・マニュアル候補を振り返る経営ログ。
 
 ## Run & Operate
 
@@ -26,11 +26,13 @@ _Populate as you build — short repo map plus pointers to the source-of-truth f
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- 店舗メモ本文と個人情報はサーバーDBへ送らず、ブラウザのIndexedDBにのみ保存する。現段階ではアプリからAIクラウド送信や同期を行わない。
+- 自動分析はキーワードとカテゴリのローカル集計であり、AIによる意味理解・予測・方針との一致判定を装わない。
+- ブラウザデータ削除や端末変更で記録が失われうるため、JSON書き出し・読み込みと明示的な全削除を提供する。端末内データは暗号化・自動バックアップされない。
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Today、Timeline、Patterns、Decisions、Direction、Manualの6領域と、プライバシー・設定画面。
 
 ## User preferences
 

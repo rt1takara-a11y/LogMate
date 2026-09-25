@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Logmate"
+description = "Noah’s Nalogの店舗オーナー向け、ブラウザ内保存を基本とする経営ログ。日々のメモ、傾向、判断、方向性、マニュアル候補を整理・可視化する。"
+version = "1.0.0"
+id = "artifacts/logmate"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25257
+
+[services.development]
+run = "pnpm --filter @workspace/logmate run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/logmate", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/logmate/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25257"
+BASE_PATH = "/"
