@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { backupNeedsReview, deriveBackupKey, newSalt, openBackup, parseEncryptedBackup, sealBackup } from './encrypted-backup';
 
 export const CATEGORIES = ['気づき', '失敗', 'スタッフ', '顧客', '売上', '商品', 'オペレーション', 'アイデア'] as const;
 export type Category = (typeof CATEGORIES)[number];
@@ -42,17 +43,19 @@ export type Logbook = {
 };
 
 const empty = (): Logbook => ({ notes: [], decisions: [], directions: [], manual: [] });
-const DB_NAME = 'logmate-local';
+const LEGACY_DB = 'logmate-local';
 const STORE_NAME = 'logbook';
 const KEY = 'current';
+const BACKUP_KEY = 'encrypted-backup';
+const BACKUP_ENABLED_KEY = 'backup-enabled';
 const now = () => new Date().toISOString();
 const text = (value: unknown): value is string => typeof value === 'string';
 const validDate = (value: unknown) => text(value) && Number.isFinite(Date.parse(value));
 
-function openDb(): Promise<IDBDatabase> {
+function openDb(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (!('indexedDB' in window)) return reject(new Error('このブラウザは端末内保存に対応していません。'));
-    const request = indexedDB.open(DB_NAME, 1);
+    const request = indexedDB.open(name, 1);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
     };
@@ -62,14 +65,27 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function transaction<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  const db = await openDb();
+async function transaction<T>(name: string, mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  const db = await openDb(name);
   return new Promise<T>((resolve, reject) => {
     let result: T;
     const tx = db.transaction(STORE_NAME, mode);
     const request = operation(tx.objectStore(STORE_NAME));
     request.onsuccess = () => { result = request.result; };
     tx.oncomplete = () => { db.close(); resolve(result); };
+    tx.onerror = () => { db.close(); reject(tx.error ?? new Error('保存に失敗しました。')); };
+    tx.onabort = () => { db.close(); reject(tx.error ?? new Error('保存が中断されました。')); };
+  });
+}
+
+async function writeEntries(name: string, values: Record<string, unknown>, remove: string[] = []): Promise<void> {
+  const db = await openDb(name);
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    for (const [key, value] of Object.entries(values)) store.put(value, key);
+    for (const key of remove) store.delete(key);
+    tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => { db.close(); reject(tx.error ?? new Error('保存に失敗しました。')); };
     tx.onabort = () => { db.close(); reject(tx.error ?? new Error('保存が中断されました。')); };
   });
@@ -99,43 +115,91 @@ function validate(input: unknown): Logbook {
   return { notes: data.notes as Note[], decisions: data.decisions as Decision[], directions: data.directions as Direction[], manual: data.manual as ManualItem[] };
 }
 
-export function useLogbook() {
+export function useLogbook(userId: string) {
+  const dbName = `logmate-user-${encodeURIComponent(userId)}`;
   const [data, setData] = useState<Logbook>(empty);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saving');
   const [error, setError] = useState<string | null>(null);
+  const [backupEnabled, setBackupEnabled] = useState(false);
+  const [backupUnlocked, setBackupUnlocked] = useState(false);
+  const [backupStatus, setBackupStatus] = useState<'off' | 'locked' | 'saving' | 'saved' | 'review' | 'error'>('off');
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [legacyAvailable, setLegacyAvailable] = useState(false);
+  const keyRef = useRef<{ key: CryptoKey; salt: Uint8Array } | null>(null);
+  const pendingSnapshotRef = useRef<Logbook | null>(null);
+  const reviewRef = useRef(false);
+  const enabledRef = useRef(false);
   const dataRef = useRef(data);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
 
   useEffect(() => {
     let active = true;
-    transaction<unknown>('readonly', store => store.get(KEY)).then(raw => {
+    Promise.all([
+      transaction<unknown>(dbName, 'readonly', store => store.get(KEY)),
+      transaction<unknown>(dbName, 'readonly', store => store.get(BACKUP_ENABLED_KEY)),
+    ]).then(([raw, backupOn]) => {
       if (!active) return;
       const loaded = raw === undefined ? empty() : validate(raw);
       dataRef.current = loaded;
       setData(loaded);
+      enabledRef.current = backupOn === true;
+      setBackupEnabled(backupOn === true);
+      setBackupStatus(backupOn === true ? 'locked' : 'off');
       setSaveStatus('saved');
     }).catch(cause => {
       if (!active) return;
       setError(cause instanceof Error ? cause.message : '保存データを読み込めませんでした。');
       setSaveStatus('error');
     }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, []);
+    transaction<unknown>(LEGACY_DB, 'readonly', store => store.get(KEY)).then(raw => {
+      if (active && raw !== undefined) {
+        validate(raw);
+        setLegacyAvailable(true);
+      }
+    }).catch(() => { /* Legacy records remain untouched if unavailable. */ });
+    return () => { active = false; keyRef.current = null; pendingSnapshotRef.current = null; };
+  }, [dbName]);
 
   const persist = useCallback((next: Logbook, erase = false) => {
     setSaveStatus('saving');
     setError(null);
-    const job = queue.current.catch(() => undefined).then(() =>
-      transaction('readwrite', store => erase ? store.delete(KEY) : store.put(next, KEY))
-    );
+    const job = queue.current.catch(() => undefined).then(async () => {
+      if (erase) {
+        await writeEntries(dbName, {}, [KEY, BACKUP_KEY, BACKUP_ENABLED_KEY]);
+        keyRef.current = null;
+        pendingSnapshotRef.current = null;
+        reviewRef.current = false;
+        enabledRef.current = false;
+        setBackupEnabled(false);
+        setBackupUnlocked(false);
+        setBackupStatus('off');
+        setBackupError(null);
+        return;
+      }
+      if (enabledRef.current && keyRef.current && !reviewRef.current) {
+        setBackupStatus('saving');
+        try {
+          const encrypted = await sealBackup(next, userId, keyRef.current.key, keyRef.current.salt);
+          await writeEntries(dbName, { [KEY]: next, [BACKUP_KEY]: encrypted });
+          setBackupStatus('saved');
+          setBackupError(null);
+        } catch (cause) {
+          setBackupStatus('error');
+          setBackupError(cause instanceof Error ? cause.message : '暗号化バックアップの更新に失敗しました。');
+          throw cause;
+        }
+      } else {
+        await writeEntries(dbName, { [KEY]: next });
+      }
+    });
     queue.current = job;
     return job.then(() => { if (dataRef.current === next) setSaveStatus('saved'); }).catch(cause => {
       setSaveStatus('error');
       setError(cause instanceof Error ? cause.message : '端末内への保存に失敗しました。');
       throw cause;
     });
-  }, []);
+  }, [dbName, userId]);
 
   const change = useCallback((update: (current: Logbook) => Logbook) => {
     if (loading || saveStatus === 'error') return Promise.reject(new Error('保存領域を利用できません。'));
@@ -170,22 +234,124 @@ export function useLogbook() {
   const deleteManual = (id: string) =>
     change(current => ({ ...current, manual: current.manual.filter(item => item.id !== id) }));
 
-  const exportData = () => {
-    const blob = new Blob([JSON.stringify({ format: 'logmate', version: 1, exportedAt: now(), data: dataRef.current }, null, 2)], { type: 'application/json' });
+  const enableBackup = async (passphrase: string) => {
+    if (loading || saveStatus === 'error') throw new Error('保存領域を利用できません。');
+    if (passphrase.length < 12) throw new Error('パスフレーズは12文字以上にしてください。');
+    await queue.current;
+    const salt = newSalt();
+    const key = await deriveBackupKey(passphrase, salt);
+    setBackupStatus('saving');
+    try {
+      const encrypted = await sealBackup(dataRef.current, userId, key, salt);
+      await writeEntries(dbName, { [BACKUP_ENABLED_KEY]: true, [BACKUP_KEY]: encrypted });
+      keyRef.current = { key, salt };
+      pendingSnapshotRef.current = null;
+      reviewRef.current = false;
+      enabledRef.current = true;
+      setBackupEnabled(true);
+      setBackupUnlocked(true);
+      setBackupStatus('saved');
+      setBackupError(null);
+    } catch (cause) {
+      setBackupStatus('error');
+      setBackupError(cause instanceof Error ? cause.message : 'バックアップを有効にできませんでした。');
+      throw cause;
+    }
+  };
+  const unlockBackup = async (passphrase: string) => {
+    await queue.current;
+    if (!enabledRef.current) throw new Error('バックアップはOFFです。');
+    const raw = await transaction<unknown>(dbName, 'readonly', store => store.get(BACKUP_KEY));
+    const opened = await openBackup(parseEncryptedBackup(raw, userId), userId, passphrase);
+    const snapshot = validate(opened.payload);
+    keyRef.current = { key: opened.key, salt: opened.salt };
+    setBackupUnlocked(true);
+    if (backupNeedsReview(dataRef.current, snapshot)) {
+      pendingSnapshotRef.current = snapshot;
+      reviewRef.current = true;
+      setBackupStatus('review');
+      setBackupError(null);
+      return;
+    }
+    pendingSnapshotRef.current = null;
+    reviewRef.current = false;
+    setBackupStatus('saved');
+    setBackupError(null);
+  };
+  const recoverLocalBackup = async () => {
+    if (!reviewRef.current || !pendingSnapshotRef.current) throw new Error('復元できるスナップショットがありません。');
+    const snapshot = pendingSnapshotRef.current;
+    await change(() => snapshot);
+    pendingSnapshotRef.current = null;
+    reviewRef.current = false;
+    setBackupStatus('saved');
+  };
+  const updateLocalBackup = async () => {
+    if (!reviewRef.current || !keyRef.current) throw new Error('比較が必要なスナップショットがありません。');
+    await queue.current;
+    setBackupStatus('saving');
+    try {
+      const encrypted = await sealBackup(dataRef.current, userId, keyRef.current.key, keyRef.current.salt);
+      await writeEntries(dbName, { [BACKUP_KEY]: encrypted });
+      pendingSnapshotRef.current = null;
+      reviewRef.current = false;
+      setBackupStatus('saved');
+      setBackupError(null);
+    } catch (cause) {
+      setBackupStatus('review');
+      setBackupError(cause instanceof Error ? cause.message : 'バックアップの更新に失敗しました。');
+      throw cause;
+    }
+  };
+  const disableBackup = async () => {
+    await queue.current;
+    await writeEntries(dbName, {}, [BACKUP_KEY, BACKUP_ENABLED_KEY]);
+    keyRef.current = null;
+    pendingSnapshotRef.current = null;
+    reviewRef.current = false;
+    enabledRef.current = false;
+    setBackupEnabled(false);
+    setBackupUnlocked(false);
+    setBackupStatus('off');
+    setBackupError(null);
+  };
+  const exportEncryptedBackup = async () => {
+    if (!enabledRef.current || !keyRef.current || !['saved', 'review'].includes(backupStatus)) {
+      throw new Error('バックアップを有効にし、パスフレーズで解除してください。');
+    }
+    await queue.current;
+    const raw = await transaction<unknown>(dbName, 'readonly', store => store.get(BACKUP_KEY));
+    const encrypted = parseEncryptedBackup(raw, userId);
+    const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `logmate-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `logmate-encrypted-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
-  const importData = async (file: File) => {
-    if (file.size > 20 * 1024 * 1024) throw new Error('20MB以下のJSONファイルを選択してください。');
-    const parsed: unknown = JSON.parse(await file.text());
-    const next = validate(parsed);
+  const restoreEncryptedBackup = async (file: File, passphrase: string) => {
+    if (file.size > 30 * 1024 * 1024) throw new Error('30MB以下の暗号化ファイルを選択してください。');
+    const raw: unknown = JSON.parse(await file.text());
+    const opened = await openBackup(parseEncryptedBackup(raw, userId), userId, passphrase);
+    const next = validate(opened.payload);
+    // If backups were enabled, rotate the in-memory encryption key to the
+    // restored passphrase so the local snapshot cannot be left stale.
+    if (enabledRef.current) {
+      keyRef.current = { key: opened.key, salt: opened.salt };
+      pendingSnapshotRef.current = null;
+      reviewRef.current = false;
+      setBackupUnlocked(true);
+    }
     await change(() => next);
+  };
+  const importLegacyData = async () => {
+    const raw = await transaction<unknown>(LEGACY_DB, 'readonly', store => store.get(KEY));
+    if (raw === undefined) throw new Error('以前の記録が見つかりません。');
+    await change(() => validate(raw));
+    // Keep anonymous data intact: another account may need to claim it.
   };
   const clearAll = async () => {
     if (loading || saveStatus === 'error') throw new Error('保存領域を利用できません。');
@@ -194,7 +360,7 @@ export function useLogbook() {
     setData(next);
     await persist(next, true);
   };
-  return { data, loading, saveStatus, error, addNote, updateNote, deleteNote, addDecision, updateDecision, deleteDecision, addDirection, updateDirection, deleteDirection, addManual, updateManual, deleteManual, exportData, importData, clearAll };
+  return { data, loading, saveStatus, error, backupEnabled, backupUnlocked, backupStatus, backupError, legacyAvailable, enableBackup, unlockBackup, recoverLocalBackup, updateLocalBackup, disableBackup, exportEncryptedBackup, restoreEncryptedBackup, importLegacyData, addNote, updateNote, deleteNote, addDecision, updateDecision, deleteDecision, addDirection, updateDirection, deleteDirection, addManual, updateManual, deleteManual, clearAll };
 }
 
 const TOPICS: { label: string; words: string[] }[] = [

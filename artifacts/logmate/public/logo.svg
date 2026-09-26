@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">Logmate</title>
+  <rect x="2" y="3" width="42" height="42" rx="12" fill="#293251"/>
+  <path d="M12 13c5-2 9-1 11 1v23c-3-2-7-3-11-1V13Zm11 1c3-2 7-3 11-1v23c-4-2-8-1-11 1V14Z" fill="none" stroke="#F3EEE2" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M23 16v19" stroke="#C98670" stroke-width="1.8"/>
+</svg>

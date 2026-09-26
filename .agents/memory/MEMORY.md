@@ -1,0 +1,1 @@
+- [Logmate backup boundary](logmate-backup-boundary.md) — keep backups local and user-carried; do not silently infer ownership of older anonymous records.
