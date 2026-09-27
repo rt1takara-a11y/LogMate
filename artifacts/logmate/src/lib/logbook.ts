@@ -18,6 +18,13 @@ export type Decision = {
   outcome: string;
   createdAt: string;
   updatedAt: string;
+  reviewHistory?: DecisionReview[];
+};
+export type DecisionReview = {
+  id: string;
+  effect: 'positive' | 'unknown' | 'negative';
+  note: string;
+  reviewedAt: string;
 };
 export type Direction = {
   id: string;
@@ -103,7 +110,14 @@ function validate(input: unknown): Logbook {
   const base = (item: unknown) => required(item, ['id', 'createdAt', 'updatedAt']) &&
     validDate((item as Note).createdAt) && validDate((item as Note).updatedAt);
   if (!(data.notes as unknown[]).every(item => base(item) && required(item, ['body', 'category'])) ||
-      !(data.decisions as unknown[]).every(item => base(item) && required(item, ['title', 'reason', 'outcome'])) ||
+      !(data.decisions as unknown[]).every(item => {
+        if (!base(item) || !required(item, ['title', 'reason', 'outcome'])) return false;
+        const reviews = (item as Decision).reviewHistory;
+        return reviews === undefined || (Array.isArray(reviews) && reviews.length <= 1000 &&
+          reviews.every(review => review && required(review, ['id', 'note', 'reviewedAt']) &&
+            validDate(review.reviewedAt) && ['positive', 'unknown', 'negative'].includes(review.effect)) &&
+          new Set(reviews.map(review => review.id)).size === reviews.length);
+      }) ||
       !(data.directions as unknown[]).every(item => base(item) && required(item, ['title', 'detail']) && ['value', 'goal'].includes((item as Direction).kind)) ||
       !(data.manual as unknown[]).every(item => base(item) && required(item, ['title', 'body', 'source']))) {
     throw new Error('一部の記録の形式が正しくありません。');
@@ -221,6 +235,22 @@ export function useLogbook(userId: string) {
     change(current => ({ ...current, decisions: current.decisions.map(item => item.id === id ? { ...item, ...patch, updatedAt: now() } : item) }));
   const deleteDecision = (id: string) =>
     change(current => ({ ...current, decisions: current.decisions.filter(item => item.id !== id) }));
+  const addDecisionReview = (id: string, effect: DecisionReview['effect'], note: string) =>
+    change(current => {
+      const target = current.decisions.find(item => item.id === id);
+      if (!target) throw new Error('対象の判断が見つかりません。');
+      if ((target.reviewHistory?.length ?? 0) >= 1000) throw new Error('これ以上の振り返りを保存できません。');
+      if (!['positive', 'unknown', 'negative'].includes(effect)) throw new Error('評価の形式が正しくありません。');
+      const reviewedAt = now();
+      return {
+        ...current,
+        decisions: current.decisions.map(item => item.id === id ? {
+          ...item,
+          updatedAt: reviewedAt,
+          reviewHistory: [...(item.reviewHistory ?? []), { id: crypto.randomUUID(), effect, note: note.trim(), reviewedAt }],
+        } : item),
+      };
+    });
   const addDirection = (input: Pick<Direction, 'title' | 'kind' | 'detail'>) =>
     change(current => ({ ...current, directions: [{ ...input, id: crypto.randomUUID(), createdAt: now(), updatedAt: now() }, ...current.directions] }));
   const updateDirection = (id: string, patch: Partial<Pick<Direction, 'title' | 'kind' | 'detail'>>) =>
@@ -360,7 +390,7 @@ export function useLogbook(userId: string) {
     setData(next);
     await persist(next, true);
   };
-  return { data, loading, saveStatus, error, backupEnabled, backupUnlocked, backupStatus, backupError, legacyAvailable, enableBackup, unlockBackup, recoverLocalBackup, updateLocalBackup, disableBackup, exportEncryptedBackup, restoreEncryptedBackup, importLegacyData, addNote, updateNote, deleteNote, addDecision, updateDecision, deleteDecision, addDirection, updateDirection, deleteDirection, addManual, updateManual, deleteManual, clearAll };
+  return { data, loading, saveStatus, error, backupEnabled, backupUnlocked, backupStatus, backupError, legacyAvailable, enableBackup, unlockBackup, recoverLocalBackup, updateLocalBackup, disableBackup, exportEncryptedBackup, restoreEncryptedBackup, importLegacyData, addNote, updateNote, deleteNote, addDecision, updateDecision, deleteDecision, addDecisionReview, addDirection, updateDirection, deleteDirection, addManual, updateManual, deleteManual, clearAll };
 }
 
 const TOPICS: { label: string; words: string[] }[] = [

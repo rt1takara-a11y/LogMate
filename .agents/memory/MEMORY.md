@@ -1,1 +1,2 @@
 - [Logmate backup boundary](logmate-backup-boundary.md) — keep backups local and user-carried; do not silently infer ownership of older anonymous records.
+- [Logmate insight evidence](logmate-insight-evidence.md) — text similarity yields review candidates, not confirmed outcomes; preserve all-history manual suggestions.

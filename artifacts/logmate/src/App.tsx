@@ -1,11 +1,17 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Switch, Redirect, useLocation, Router as WouterRouter } from 'wouter';
 import { ClerkProvider, SignIn, SignUp, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { jaJP } from '@clerk/localizations';
-import { BookOpen, CalendarDays, ChartNoAxesColumn, Check, ChevronDown, ChevronRight, CircleHelp, Compass, Download, FileText, HardDrive, Lightbulb, LockKeyhole, LogOut, NotebookPen, PenLine, Plus, Search, Settings2, ShieldCheck, Sparkles, Trash2, Upload, X } from 'lucide-react';
-import { useLogbook, CATEGORIES, derivePatterns, deriveManualCandidates } from '@/lib/logbook';
+import { BookOpen, CalendarDays, CalendarRange, ChartNoAxesColumn, Check, ChevronDown, ChevronRight, CircleHelp, Compass, Download, FileText, HardDrive, Lightbulb, LockKeyhole, LogOut, NotebookPen, PenLine, Plus, Search, Settings2, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
+import { useLogbook, CATEGORIES } from '@/lib/logbook';
+import { buildInsights } from '@/lib/insights';
+import WeeklyReview from '@/components/WeeklyReview';
+import PatternsDashboard from '@/components/PatternsDashboard';
+import DecisionReviewPanel from '@/components/DecisionReviewPanel';
+import DirectionInsights from '@/components/DirectionInsights';
+import ManualCandidates from '@/components/ManualCandidates';
 
 const clerkPubKey = publishableKeyFromHost(
   window.location.hostname,
@@ -80,6 +86,7 @@ const NAV = [
   { href: '/decisions', label: '判断', en: 'Decisions', icon: Compass },
   { href: '/direction', label: '方針', en: 'Direction', icon: Lightbulb },
   { href: '/manual', label: 'マニュアル', en: 'Manual', icon: BookOpen },
+  { href: '/weekly-review', label: '週次レビュー', en: 'Weekly Review', icon: CalendarRange },
   { href: '/settings', label: '設定', en: 'Privacy', icon: Settings2 },
 ];
 const dateText = (value: string) => {
@@ -148,7 +155,13 @@ function Journal({ userId }: { userId: string }) {
   const [filter, setFilter] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [restorePassphrase, setRestorePassphrase] = useState('');
+  const [clock, setClock] = useState(() => Date.now());
   const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const delay = 3_600_000 - (Date.now() % 3_600_000) + 1000;
+    const timer = window.setTimeout(() => setClock(Date.now()), delay);
+    return () => window.clearTimeout(timer);
+  }, [clock]);
   const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 3600); };
   const run = async (action: () => Promise<void>, success: string) => {
     setBusy(true);
@@ -173,8 +186,8 @@ function Journal({ userId }: { userId: string }) {
   const decisions = sorted(data.decisions);
   const directions = sorted(data.directions);
   const manuals = sorted(data.manual);
-  const patterns = derivePatterns(data.notes);
-  const candidates = deriveManualCandidates(data.notes, data.decisions, data.manual);
+  const insights = useMemo(() => buildInsights(data, new Date(clock)), [data, clock]);
+  const { patterns, manualCandidates: candidates, weekly } = insights;
   const filteredNotes = notes.filter(note => (!filter || note.category === filter) && (!search.trim() || `${note.body} ${note.category}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())));
   const openNote = (n: Note) => setEditor({ kind:'note', id:n.id, initial:{ body:n.body, category:n.category } });
   const page = NAV.find(n => n.href === location);
@@ -183,7 +196,7 @@ function Journal({ userId }: { userId: string }) {
       <Link href="/" className="brand" data-testid="link-home"><span className="brand-mark"><BookOpen size={18} strokeWidth={1.8}/></span><span className="brand-word">logmate<span style={{color:'#e6a58f'}}>.</span></span></Link>
       <p className="brand-caption">THE OWNER'S FIELD NOTES</p>
       <div className="nav-label">YOUR NOTEBOOK</div>
-      <nav className="nav-list" aria-label="メインナビゲーション">{NAV.slice(0,6).map((item,i) => <Link key={item.href} href={item.href} className={`nav-link ${location===item.href?'active':''}`} data-testid={`link-${item.en.toLowerCase()}`}><item.icon /><span>{item.label}</span><span className="nav-number">0{i+1}</span></Link>)}</nav>
+       <nav className="nav-list" aria-label="メインナビゲーション">{NAV.slice(0,7).map((item,i) => <Link key={item.href} href={item.href} className={`nav-link ${location===item.href?'active':''}`} data-testid={`link-${item.en.toLowerCase().replace(' ', '-')}`}><item.icon /><span>{item.label}</span><span className="nav-number">0{i+1}</span></Link>)}</nav>
        <div className="sidebar-bottom"><Link href="/settings" className={`nav-link ${location==='/settings'?'active':''}`} data-testid="link-settings"><Settings2 /><span>プライバシー・設定</span></Link><div className="sidebar-privacy"><strong>この記録は、この端末に。</strong>Clerkは本人確認のみ。記録は自動共有されません。</div></div>
     </aside>
     <main className="main">
@@ -197,18 +210,42 @@ function Journal({ userId }: { userId: string }) {
              <div className="today-grid"><section><div className="section-head"><div><div className="section-kicker">01 — CAPTURE</div><h2 className="section-title">今日、気づいたこと</h2></div><span className="section-hint">{dateText(new Date().toISOString())}</span></div>
               <form className="paper composer" onSubmit={submitMemo}><textarea data-testid="input-today-memo" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="お客さんのひと言、試してみたこと、うまくいかなかったこと。何でも、ここに。" aria-label="今日のメモ"/><div className="composer-foot"><span className="select-wrap"><select data-testid="select-today-category" aria-label="カテゴリ" value={category} onChange={e=>setCategory(e.target.value)}><option value="">カテゴリなし</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><ChevronDown /></span><button className="btn btn-primary" data-testid="button-save-memo" disabled={!memo.trim() || savingMemo} type="submit"><Plus/>記録する</button></div></form>
             </section><aside className="side-note"><ShieldCheck className="small-icon" size={25} strokeWidth={1.5}/><h3>書くだけで、十分です。</h3><p>整った文章でなくても大丈夫。小さな違和感や発見が、あとから店の判断を支える材料になります。</p><div className="rule"><HardDrive size={14}/>メモはこの端末のみに保存されます</div></aside></div>
-            <section className="recent-section"><div className="section-head"><div><div className="section-kicker">RECENT ENTRIES</div><h2 className="section-title">最近の記録</h2></div><Link href="/timeline" className="text-link" data-testid="link-all-notes">すべて見る <ChevronRight size={14}/></Link></div>{notes.length ? <NoteRows notes={notes.slice(0,4)} onEdit={openNote} onDelete={n=>askDelete('note',n.id)}/> : <Empty icon={NotebookPen} title="まだ記録はありません" description="今日の気づきを一つ書くところから、あなたの店のログが始まります。"/>}</section>
+             <section className="weekly-peek" data-testid="card-weekly-peek"><div><div className="section-kicker">THIS WEEK / FROM YOUR NOTES</div><h2>今週の気づき</h2><p data-testid="text-weekly-peek">{weekly.entryCount ? `直近7日間に ${weekly.entryCount} 件の記録。${weekly.frequentThemes[0] ? `よく現れた話題は「${weekly.frequentThemes[0].label}」です。` : '今週の記録を見返しましょう。'}` : '今週はまだ記録がありません。小さな気づきから始めましょう。'}</p></div><Link href="/weekly-review" className="btn btn-primary" data-testid="link-weekly-review">週次レビューを見る <ChevronRight size={16}/></Link></section>
+             <section className="recent-section"><div className="section-head"><div><div className="section-kicker">RECENT ENTRIES</div><h2 className="section-title">最近の記録</h2></div><Link href="/timeline" className="text-link" data-testid="link-all-notes">すべて見る <ChevronRight size={14}/></Link></div>{notes.length ? <NoteRows notes={notes.slice(0,4)} onEdit={openNote} onDelete={n=>askDelete('note',n.id)}/> : <Empty icon={NotebookPen} title="まだ記録はありません" description="今日の気づきを一つ書くところから、あなたの店のログが始まります。"/>}</section>
           </>}</Route>
            <Route path="/timeline"><Heading index="02" title="記録をたどる" subtitle="日々の気づきと判断を、時系列で読み返せる場所。言葉やカテゴリで絞り込めます。"/><div className="toolbar"><div className="searchbox"><Search/><input data-testid="input-search-notes" type="search" placeholder="記録を検索" value={search} onChange={e=>setSearch(e.target.value)}/></div><span className="select-wrap"><select data-testid="select-filter-category" value={filter} onChange={e=>setFilter(e.target.value)} aria-label="カテゴリで絞り込む"><option value="">すべてのカテゴリ</option>{[...new Set([...CATEGORIES, ...notes.map(n=>n.category).filter(Boolean)])].map(c=><option key={c} value={c}>{c}</option>)}</select><ChevronDown/></span></div><div className="section-head"><h2 className="section-title">これまでの記録</h2><span className="section-hint">{filteredNotes.length + (filter ? 0 : decisions.filter(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())).length)} 件</span></div>{filteredNotes.length || (!filter && decisions.some(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))) ? <TimelineEvents notes={filteredNotes} decisions={filter ? [] : decisions.filter(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))} onEditNote={openNote} onDeleteNote={n=>askDelete('note',n.id)} onEditDecision={d=>setEditor({kind:'decision',id:d.id,initial:d})} onDeleteDecision={d=>askDelete('decision',d.id)}/> : <Empty icon={Search} title={notes.length || decisions.length?'該当する記録はありません':'まだ記録はありません'} description={notes.length || decisions.length?'検索する言葉やカテゴリを変えてみてください。':'今日のページで最初の気づきを記録しましょう。'} action={!notes.length && !decisions.length?<Link href="/" className="btn btn-primary" data-testid="link-first-note">今日のページへ</Link>:undefined}/>}</Route>
-          <Route path="/patterns"><Heading index="03" title="変化の手がかり" subtitle="記録の中から見える傾向。推測ではなく、書き残した内容だけをもとに表示します。"/><div className="metric-strip"><div className="metric"><strong>{notes.length}</strong><span>件のメモ</span></div><div className="metric"><strong>{patterns.categoryCounts.length}</strong><span>使われたカテゴリ</span></div></div>{notes.length ? <div className="block-grid"><section className="paper analysis-card wide"><div className="section-kicker">FREQUENCY</div><h3>よく書いていること</h3><p className="card-desc">カテゴリ別の記録数。カテゴリを付けたメモを集計しています。</p>{patterns.categoryCounts.length ? patterns.categoryCounts.map(item=><div className="bar-row" key={item.category}><span>{item.category}</span><div className="bar-track"><div className="bar-fill" style={{width:`${100*item.count/Math.max(...patterns.categoryCounts.map(x=>x.count))}%`}}/></div><strong>{item.count}</strong></div>) : <p className="muted-message">カテゴリ付きのメモが増えると、ここに傾向が表示されます。</p>}</section>
-            <SignalCard title="繰り返し現れる課題" subtitle="複数の記録に登場したテーマ" items={patterns.recurring.map(x=>({label:x.label, value:`${x.count}件`}))} empty="繰り返し見つかったテーマは、まだありません。"/>
-            <SignalCard title="増えている話題" subtitle="最近の記録と、それ以前を比較" items={patterns.growing.map(x=>({label:x.label,value:`${x.previous} → ${x.recent}`}))} empty="増加傾向を示せる記録は、まだありません。"/>
-            <SignalCard title="改善の兆し" subtitle="記録から読み取れる前向きな変化" items={patterns.improving.map(x=>({label:x.label,value:`${x.count}件`}))} empty="改善の兆しを示せる記録は、まだありません。"/>
-            <section className="paper analysis-card"><div className="section-kicker">A NOTE ON PATTERNS</div><h3>数字は、結論ではありません。</h3><p className="card-desc" style={{marginTop:12}}>ここにあるのは、あなたが書いた記録から拾った手がかりです。実際の状況と照らし合わせて、次の一歩を考えるために使ってください。</p></section>
-          </div> : <div style={{marginTop:30}}><Empty icon={ChartNoAxesColumn} title="傾向は、記録から生まれます" description="メモが増えると、繰り返す話題やカテゴリの傾向がここに現れます。架空の分析は表示しません。" action={<Link href="/" className="btn btn-primary" data-testid="link-patterns-today">メモを書く</Link>}/></div>}</Route>
-          <Route path="/decisions"><Heading index="04" title="判断の記録" subtitle="何を決め、なぜ決めたか。結果もあとから書き足して、次の判断につなげます。" action={<button className="btn btn-primary" data-testid="button-add-decision" onClick={()=>setEditor({kind:'decision'})}><Plus/>判断を記録</button>}/><div style={{marginTop:32}}>{decisions.length ? decisions.map(d=><article className="paper record-card" key={d.id} data-testid={`decision-${d.id}`}><div className="record-top"><div><h3 className="record-title">{d.title}</h3><p className="record-date">{dateText(d.createdAt)}</p></div><div className="record-toolbar"><button className="icon-btn" aria-label="判断を編集" data-testid={`button-edit-decision-${d.id}`} onClick={()=>setEditor({kind:'decision',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="判断を削除" data-testid={`button-delete-decision-${d.id}`} onClick={()=>askDelete('decision',d.id)}><Trash2/></button></div></div><div className="record-field"><label>決めた理由</label><p>{d.reason || '理由はまだ記録されていません。'}</p></div><div className="record-field"><label>その後の結果</label><p>{d.outcome || '結果はまだ記録されていません。あとから追記できます。'}</p></div></article>) : <Empty icon={Compass} title="まだ判断の記録はありません" description="小さな決定も、理由と一緒に残すとあとから役立ちます。" action={<button className="btn btn-primary" data-testid="button-first-decision" onClick={()=>setEditor({kind:'decision'})}>最初の判断を記録</button>}/>}</div></Route>
-           <Route path="/direction"><Heading index="05" title="店の向かう先" subtitle="大切にしたい価値観と、これから目指すこと。日々の行動と並べて見返せます。" action={<button className="btn btn-primary" data-testid="button-add-direction" onClick={()=>setEditor({kind:'direction'})}><Plus/>方針を追加</button>}/><div className="direction-banner"><Compass/><div><strong>迷ったとき、ここに戻る。</strong><p>方針は正解を決めるものではなく、判断の軸を思い出すためのものです。</p></div></div>{directions.length ? <><div className="block-grid" style={{marginTop:0}}>{directions.map(d=><article className="paper record-card" style={{marginTop:0}} key={d.id} data-testid={`direction-${d.id}`}><div className="record-top"><div><span className={`pill ${d.kind==='goal'?'goal':''}`}>{d.kind==='goal'?'目標':'大切にすること'}</span><h3 className="record-title">{d.title}</h3></div><div className="record-toolbar"><button className="icon-btn" aria-label="方針を編集" data-testid={`button-edit-direction-${d.id}`} onClick={()=>setEditor({kind:'direction',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="方針を削除" data-testid={`button-delete-direction-${d.id}`} onClick={()=>askDelete('direction',d.id)}><Trash2/></button></div></div><div className="record-field"><p>{d.detail || '詳しい内容はまだありません。'}</p></div></article>)}</div><DirectionReview notes={notes} decisions={decisions}/></> : <Empty icon={Lightbulb} title="店の方針を、言葉にしてみましょう" description="「こんな店でありたい」という価値観や、具体的な目標を書き留められます。" action={<button className="btn btn-primary" data-testid="button-first-direction" onClick={()=>setEditor({kind:'direction'})}>方針を追加</button>}/>}</Route>
-          <Route path="/manual"><Heading index="06" title="店のマニュアル" subtitle="繰り返す問題や、定着した判断を「次に使える知恵」として残します。" action={<button className="btn btn-primary" data-testid="button-add-manual" onClick={()=>setEditor({kind:'manual'})}><Plus/>項目を追加</button>}/><section style={{marginTop:35}}><div className="section-head"><div><div className="section-kicker">SUGGESTED FROM YOUR LOG</div><h2 className="section-title">記録からの候補</h2></div><span className="section-hint">{candidates.length} 件</span></div>{candidates.length ? candidates.map((candidate,i)=><div className="candidate" key={`${candidate.title}-${i}`}><div><h3>{candidate.title}</h3><p>{candidate.body}</p><span className="tag" style={{marginTop:10}}>{candidate.source}</span></div><button className="btn btn-soft" data-testid={`button-adopt-candidate-${i}`} onClick={()=>setEditor({kind:'manual',initial:candidate})}>編集して採用 <ChevronRight/></button></div>) : <Empty icon={Sparkles} title="今は候補がありません" description="同じ課題が繰り返し記録されたり、判断が積み重なると、マニュアルの候補がここに表示されます。"/>}</section><section style={{marginTop:43}}><div className="section-head"><div><div className="section-kicker">YOUR PLAYBOOK</div><h2 className="section-title">保存したマニュアル</h2></div><span className="section-hint">{manuals.length} 件</span></div>{manuals.length ? manuals.map(m=><article className="paper record-card" key={m.id} data-testid={`manual-${m.id}`}><div className="record-top"><div><h3 className="record-title">{m.title}</h3><p className="record-date">{dateText(m.createdAt)} {m.source && `・${m.source}`}</p></div><div className="record-toolbar"><button className="icon-btn" aria-label="マニュアルを編集" data-testid={`button-edit-manual-${m.id}`} onClick={()=>setEditor({kind:'manual',id:m.id,initial:m})}><PenLine/></button><button className="icon-btn danger" aria-label="マニュアルを削除" data-testid={`button-delete-manual-${m.id}`} onClick={()=>askDelete('manual',m.id)}><Trash2/></button></div></div><div className="record-field"><p>{m.body}</p></div></article>) : <Empty icon={BookOpen} title="マニュアルはまだありません" description="実際に役立ったやり方を、自分の言葉で残しておけます。"/>}</section></Route>
+          <Route path="/patterns"><PatternsDashboard patterns={patterns} noteCount={notes.length}/></Route>
+          <Route path="/decisions">
+            <Heading index="04" title="判断の記録" subtitle="何を決め、なぜ決めたか。その後の記録と評価を時系列で残します。" action={<button className="btn btn-primary" data-testid="button-add-decision" onClick={()=>setEditor({kind:'decision'})}><Plus/>判断を記録</button>}/>
+            <div style={{marginTop:32}}>{decisions.length ? decisions.map(d=><article className="paper record-card" key={d.id} data-testid={`decision-${d.id}`}>
+              <div className="record-top"><div><h3 className="record-title">{d.title}</h3><p className="record-date">{dateText(d.createdAt)}</p></div><div className="record-toolbar"><button className="icon-btn" aria-label="判断を編集" data-testid={`button-edit-decision-${d.id}`} onClick={()=>setEditor({kind:'decision',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="判断を削除" data-testid={`button-delete-decision-${d.id}`} onClick={()=>askDelete('decision',d.id)}><Trash2/></button></div></div>
+              <div className="record-field"><label>決めた理由</label><p>{d.reason || '理由はまだ記録されていません。'}</p></div>
+              <div className="record-field"><label>その後の結果</label><p>{d.outcome || '結果はまだ記録されていません。あとから追記できます。'}</p></div>
+              <DecisionReviewPanel decision={d} notes={notes} busy={busy} onReview={(effect,note)=>run(()=>log.addDecisionReview(d.id,effect,note),'振り返りを保存しました。')}/>
+            </article>) : <Empty icon={Compass} title="まだ判断の記録はありません" description="小さな決定も、理由と一緒に残すとあとから役立ちます。" action={<button className="btn btn-primary" data-testid="button-first-decision" onClick={()=>setEditor({kind:'decision'})}>最初の判断を記録</button>}/>}</div>
+          </Route>
+           <Route path="/direction">
+             <Heading index="05" title="店の向かう先" subtitle="大切にしたい価値観と、これから目指すこと。最近の行動と並べて見返せます。" action={<button className="btn btn-primary" data-testid="button-add-direction" onClick={()=>setEditor({kind:'direction'})}><Plus/>方針を追加</button>}/>
+             <div className="direction-banner"><Compass/><div><strong>迷ったとき、ここに戻る。</strong><p>関係しそうな記録は、決めつけずに見比べるためのヒントです。</p></div></div>
+             {directions.length ? <>
+               <div className="block-grid" style={{marginTop:0}}>{directions.map(d=><article className="paper record-card" style={{marginTop:0}} key={d.id} data-testid={`direction-${d.id}`}>
+                 <div className="record-top"><div><span className={`pill ${d.kind==='goal'?'goal':''}`}>{d.kind==='goal'?'目標':'大切にすること'}</span><h3 className="record-title">{d.title}</h3></div>
+                   <div className="record-toolbar"><button className="icon-btn" aria-label="方針を編集" data-testid={`button-edit-direction-${d.id}`} onClick={()=>setEditor({kind:'direction',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="方針を削除" data-testid={`button-delete-direction-${d.id}`} onClick={()=>askDelete('direction',d.id)}><Trash2/></button></div></div>
+                 <div className="record-field"><p>{d.detail || '詳しい内容はまだありません。'}</p></div>
+                 <DirectionInsights direction={d} data={data}/>
+               </article>)}</div><DirectionReview notes={notes} decisions={decisions}/>
+             </> : <Empty icon={Lightbulb} title="店の方針を、言葉にしてみましょう" description="「こんな店でありたい」という価値観や、具体的な目標を書き留められます。" action={<button className="btn btn-primary" data-testid="button-first-direction" onClick={()=>setEditor({kind:'direction'})}>方針を追加</button>}/>}
+           </Route>
+          <Route path="/manual">
+            <Heading index="06" title="店のマニュアル" subtitle="繰り返す問題や、役立った判断を「次に使える知恵」として残します。" action={<button className="btn btn-primary" data-testid="button-add-manual" onClick={()=>setEditor({kind:'manual'})}><Plus/>項目を追加</button>}/>
+            <section style={{marginTop:35}}><div className="section-head"><div><div className="section-kicker">SUGGESTED FROM YOUR LOG</div><h2 className="section-title">記録からの候補</h2></div><span className="section-hint">{candidates.length} 件</span></div>
+              <ManualCandidates candidates={candidates} onAdopt={candidate=>setEditor({kind:'manual',initial:candidate})}/>
+            </section>
+            <section style={{marginTop:43}}><div className="section-head"><div><div className="section-kicker">YOUR PLAYBOOK</div><h2 className="section-title">保存したマニュアル</h2></div><span className="section-hint">{manuals.length} 件</span></div>
+              {manuals.length ? manuals.map(m=><article className="paper record-card" key={m.id} data-testid={`manual-${m.id}`}><div className="record-top"><div><h3 className="record-title">{m.title}</h3><p className="record-date">{dateText(m.createdAt)} {m.source && `・${m.source}`}</p></div><div className="record-toolbar"><button className="icon-btn" aria-label="マニュアルを編集" data-testid={`button-edit-manual-${m.id}`} onClick={()=>setEditor({kind:'manual',id:m.id,initial:m})}><PenLine/></button><button className="icon-btn danger" aria-label="マニュアルを削除" data-testid={`button-delete-manual-${m.id}`} onClick={()=>askDelete('manual',m.id)}><Trash2/></button></div></div><div className="record-field"><p>{m.body}</p></div></article>) : <Empty icon={BookOpen} title="マニュアルはまだありません" description="実際に役立ったやり方を、自分の言葉で残しておけます。"/>}
+            </section>
+          </Route>
+          <Route path="/weekly-review"><WeeklyReview summary={weekly} onAdopt={candidate=>setEditor({kind:'manual',initial:candidate})}/></Route>
            <Route path="/settings">
              <Heading index="07" title="プライバシーと設定" subtitle="記録とバックアップの扱いは、あなたが決められます。"/>
              <section className="paper settings-panel">
@@ -281,9 +318,6 @@ function Journal({ userId }: { userId: string }) {
      {confirm && <div className="dialog-backdrop" role="presentation" onMouseDown={e=>{if(e.target===e.currentTarget)setConfirm(null)}}><div className="dialog" role="alertdialog" aria-modal="true" aria-label="操作の確認"><div className="dialog-head"><h2>操作の確認</h2><button className="icon-btn" aria-label="閉じる" data-testid="button-close-confirm" onClick={()=>setConfirm(null)}><X/></button></div><p style={{fontSize:13,lineHeight:1.8,color:'#636879'}}>{confirm.message}</p><div className="dialog-actions"><button className="btn btn-soft" data-testid="button-cancel-delete" onClick={()=>setConfirm(null)}>キャンセル</button><button className="btn btn-danger" data-testid="button-confirm-delete" disabled={busy} onClick={async()=>{if(await run(confirm.action,'操作が完了しました。'))setConfirm(null)}}><Check/>続ける</button></div></div></div>}
     {notice && <div className="toast-note" role="status" data-testid="status-notice"><Check size={14} style={{display:'inline',marginRight:8}}/>{notice}</div>}
   </div>;
-}
-function SignalCard({title,subtitle,items,empty}:{title:string;subtitle:string;items:{label:string;value:string}[];empty:string}) {
-  return <section className="paper analysis-card"><h3>{title}</h3><p className="card-desc">{subtitle}</p>{items.length?<div className="signal-list">{items.map((item,i)=><span className="signal" key={`${item.label}-${i}`}>{item.label}<strong>{item.value}</strong></span>)}</div>:<p className="muted-message">{empty}</p>}</section>;
 }
 function EditorDialog({editor,busy,onClose,onSave}:{editor:Editor;busy:boolean;onClose:()=>void;onSave:(values:Draft)=>Promise<void>}) {
   const [values,setValues] = useState<Draft>({body:editor.initial?.body ?? '',category:editor.initial?.category ?? '',title:editor.initial?.title ?? '',reason:editor.initial?.reason ?? '',outcome:editor.initial?.outcome ?? '',kind:editor.initial?.kind ?? 'value',detail:editor.initial?.detail ?? '',source:editor.initial?.source ?? ''});
