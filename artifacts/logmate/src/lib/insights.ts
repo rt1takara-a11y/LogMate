@@ -7,6 +7,32 @@ export type ThemeInsight = {
   examples: Note[];
 };
 
+export type WeeklyThemeInsight = ThemeInsight & {
+  previousCount: number;
+  delta: number;
+  previousExamples: Note[];
+};
+
+export type WeeklyChange = {
+  id: string;
+  label: string;
+  previousCount: number;
+  currentCount: number;
+  examples: Note[];
+  previousExamples: Note[];
+  description: string;
+};
+
+export type DecisionFollowup = {
+  decision: Decision;
+  before: number;
+  after: number;
+  comparisonDays: number;
+  beforeExamples: Note[];
+  afterExamples: Note[];
+  description: string;
+};
+
 export type ManualCandidate = {
   id: string;
   title: string;
@@ -24,12 +50,18 @@ export type WeeklyReviewSummary = {
   entryCount: number;
   noteCount: number;
   decisionCount: number;
-  frequentThemes: ThemeInsight[];
-  recurringProblems: ThemeInsight[];
+  frequentThemes: WeeklyThemeInsight[];
+  recurringProblems: WeeklyThemeInsight[];
   positiveChanges: Note[];
+  improvingChanges: WeeklyChange[];
+  worseningChanges: WeeklyChange[];
   decisions: Decision[];
+  decisionFollowups: DecisionFollowup[];
+  directionSignals: { direction: Direction; match: DirectionMatch }[];
   unresolved: Note[];
+  successNotes: Note[];
   manualCandidates: ManualCandidate[];
+  highlights: { text: string; href: string }[];
 };
 
 export type PatternInsight = ThemeInsight & {
@@ -62,6 +94,10 @@ const ISSUE = /問題|課題|失敗|困っ|難し|できなかった|できて�
 const POSITIVE = /改善|良くな|よくな|解決|減った|増えた|順調|成功|できた|うまくいった|好評|喜ばれ|達成/i;
 const RESOLVED = /解決|改善|うまくいった|直した|修正した|落ち着いた|できた/i;
 const NEGATED = /できなかった|できていない|できず|できない|解決していない|改善していない|改善しなかった|良くならな|うまくいかな|失敗した|まだ問題/i;
+// A bare "increased/decreased" does not indicate whether the change helped.
+const IMPROVEMENT = /改善|良くな|よくな|解決|順調|できた/i;
+const SUCCESS = /成功|好評|喜ばれ|達成|うまくいった|できた/i;
+const WORSENING = /悪化|増えてしま|増え続け|ひどくな|減ってしま|さらに遅れ/i;
 const OPPOSITES = [
   ['増や', '減ら'], ['続け', 'やめ'], ['続け', '中止'],
   ['丁寧', '省略'], ['重視', '後回し'], ['早く', '遅れ'],
@@ -142,6 +178,14 @@ function isPositive(note: Note): boolean {
   return POSITIVE.test(note.body) && !NEGATED.test(note.body);
 }
 
+function isImprovement(note: Note): boolean {
+  return isPositive(note) && !isIssue(note) && IMPROVEMENT.test(note.body);
+}
+
+function isSuccess(note: Note): boolean {
+  return isPositive(note) && !isIssue(note) && SUCCESS.test(note.body);
+}
+
 function isResolved(body: string): boolean {
   return RESOLVED.test(body) && !NEGATED.test(body);
 }
@@ -190,6 +234,15 @@ function theme(cluster: Cluster, notes = cluster.members): ThemeInsight {
   };
 }
 
+function weeklyTheme(cluster: Cluster, current: Note[], previous: Note[]): WeeklyThemeInsight {
+  return {
+    ...theme(cluster, current),
+    previousCount: previous.length,
+    delta: current.length - previous.length,
+    previousExamples: [...previous].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 3),
+  };
+}
+
 function startOfWeek(value: Date): Date {
   const date = new Date(value);
   date.setHours(0, 0, 0, 0);
@@ -232,7 +285,7 @@ function makeManualCandidates(clusters: Cluster[], data: Logbook): ManualCandida
   for (const cluster of clusters) {
     const label = clusterLabel(cluster);
     const problems = cluster.members.filter(isIssue);
-    const successes = cluster.members.filter(isPositive);
+    const successes = cluster.members.filter(isSuccess);
     for (const [kind, sourceNotes] of [['issue', problems], ['success', successes]] as const) {
       if (sourceNotes.length < 2) continue;
       const recent = [...sourceNotes].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
@@ -273,6 +326,7 @@ function makeManualCandidates(clusters: Cluster[], data: Logbook): ManualCandida
 
 export function buildInsights(data: Logbook, now = new Date()) {
   const from = new Date(now.getTime() - 7 * DAY);
+  const previousFrom = from.getTime() - 7 * DAY;
   const earliestWeek = weekStarts(now)[0].getTime();
   const relevant = data.notes.filter(note => {
     const date = Date.parse(note.createdAt);
@@ -289,25 +343,137 @@ export function buildInsights(data: Logbook, now = new Date()) {
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const relevantClusters = clusters.map(cluster => {
     const recent = cluster.members.filter(item => Date.parse(item.createdAt) >= from.getTime());
-    return { cluster, recent };
+    const previous = cluster.members.filter(item => {
+      const date = Date.parse(item.createdAt);
+      return date >= previousFrom && date < from.getTime();
+    });
+    return { cluster, recent, previous };
   }).filter(({ recent }) => recent.length);
   const manualCandidates = makeManualCandidates(clusterNotes(data.notes), data);
   // There is no explicit resolved state on notes; avoid silently dropping
   // issues based on later positive-sounding phrases.
   const unresolved = recentNotes.filter(isIssue)
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 6);
+  const improvingChanges: WeeklyChange[] = relevantClusters.flatMap(({ cluster, recent, previous }) => {
+    const before = previous.filter(isIssue);
+    const after = recent.filter(isIssue);
+    const positive = recent.filter(isImprovement);
+    if (!before.length || after.length >= before.length || !positive.length) return [];
+    return [{
+      id: cluster.members[0].id, label: clusterLabel(cluster),
+      previousCount: before.length, currentCount: after.length,
+      examples: positive.slice(0, 3), previousExamples: before.slice(0, 3),
+      description: '関連する困りごとの記録は減り、改善に触れた記録があります。実際の改善は元の記録で確認してください。',
+    }];
+  }).sort((a, b) => b.previousCount - b.currentCount - (a.previousCount - a.currentCount)).slice(0, 3);
+  const worseningChanges: WeeklyChange[] = relevantClusters.flatMap(({ cluster, recent, previous }) => {
+    const before = previous.filter(isIssue);
+    const after = recent.filter(isIssue);
+    const explicit = after.some(note => WORSENING.test(note.body));
+    if (!after.length || (!explicit && (after.length < 2 || after.length <= before.length))) return [];
+    return [{
+      id: cluster.members[0].id, label: clusterLabel(cluster),
+      previousCount: before.length, currentCount: after.length,
+      examples: [...after].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 3),
+      previousExamples: before.slice(0, 3),
+      description: after.length > before.length
+        ? '関連する困りごとの記録が前の7日間より増えています。記録頻度の変化かもしれません。'
+        : '悪化に触れた記録があります。件数だけでは状態を判断できません。',
+    }];
+  }).sort((a, b) => b.currentCount - a.currentCount).slice(0, 3);
+  // Compare equal 7-day windows: the seven days before an older decision
+  // and the current review window. These are references, not a causal test.
+  const decisionFollowups: DecisionFollowup[] = data.decisions.filter(decision => {
+    const date = Date.parse(decision.createdAt);
+    return date < from.getTime() && date <= now.getTime();
+  }).flatMap(decision => {
+    const query = `${decision.title} ${decision.reason}`.trim();
+    if (!query) return [];
+    const decidedAt = Date.parse(decision.createdAt);
+    const before = data.notes.filter(note => {
+      const date = Date.parse(note.createdAt);
+      return date >= decidedAt - 7 * DAY && date < decidedAt && relatedness(query, note.body) >= 0.3;
+    });
+    const after = recentNotes.filter(note =>
+      Date.parse(note.createdAt) > decidedAt && relatedness(query, note.body) >= 0.3);
+    if (!after.length) return [];
+    return [{
+      decision, before: before.length, after: after.length, comparisonDays: 7,
+      beforeExamples: [...before].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 3),
+      afterExamples: [...after].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 3),
+      description: after.length > before.length ? '関連する記録が増えた可能性'
+        : after.length < before.length ? '関連する記録が減った可能性' : '関連する記録は同数',
+    }];
+  }).sort((a, b) => b.after - a.after).slice(0, 3);
+  const directionSignals = data.directions.flatMap(direction => directionMatches(direction, data, now)
+    .filter(match => Date.parse(match.date) >= from.getTime())
+    .filter(match => match.prompt === 'contrast' ||
+      relatedness(`${direction.title} ${direction.detail}`, match.text) >= 0.45)
+    .map(match => ({ direction, match }))).slice(0, 3);
+  const weeklyManualCandidates = manualCandidates.filter(candidate => {
+    if (Date.parse(candidate.lastSeenAt) < from.getTime()) return false;
+    if (!candidate.source.startsWith('判断: ')) return true;
+    const decision = data.decisions.find(item => `判断: ${item.id}` === candidate.source);
+    return decision?.reviewHistory?.at(-1)?.effect === 'positive';
+  }).slice(0, 5);
+  const frequentThemes = relevantClusters.map(({ cluster, recent, previous }) =>
+    weeklyTheme(cluster, recent, previous)).sort((a, b) => b.count - a.count).slice(0, 3);
+  const recurringProblems = relevantClusters.map(({ cluster, recent, previous }) => {
+    const problems = recent.filter(isIssue);
+    return problems.length >= 2 ? weeklyTheme(cluster, problems, previous.filter(isIssue)) : null;
+  }).filter((value): value is WeeklyThemeInsight => value !== null).sort((a, b) => b.count - a.count).slice(0, 5);
+  const highlights: WeeklyReviewSummary['highlights'] = [];
+  if (worseningChanges[0]) highlights.push({
+    text: worseningChanges[0].currentCount > worseningChanges[0].previousCount
+      ? `${worseningChanges[0].label}の困りごとの記録が増えた可能性（${worseningChanges[0].previousCount}→${worseningChanges[0].currentCount}件）`
+      : `${worseningChanges[0].label}について悪化に触れた記録があります（件数は${worseningChanges[0].previousCount}→${worseningChanges[0].currentCount}件）`,
+    href: '/weekly-review#wr-worsening',
+  });
+  if (improvingChanges[0]) highlights.push({
+    text: `${improvingChanges[0].label}に改善の兆しが記録されています`,
+    href: '/weekly-review#wr-positive',
+  });
+  if (recurringProblems[0] && highlights.length < 3) highlights.push({
+    text: `${recurringProblems[0].label}の困りごとが${recurringProblems[0].count}件、繰り返し記録されました`,
+    href: '/weekly-review#wr-problems',
+  });
+  if (directionSignals[0] && highlights.length < 3) highlights.push({
+    text: `${directionSignals[0].direction.title}と最近の記録を照らし合わせられます`,
+    href: '/weekly-review#wr-direction',
+  });
+  if (decisionFollowups[0] && highlights.length < 3) highlights.push({
+    text: `${decisionFollowups[0].decision.title}の後の関連記録を見返せます`,
+    href: '/weekly-review#wr-followups',
+  });
+  if (frequentThemes[0] && highlights.length < 3 &&
+    !highlights.some(item => item.text.includes(frequentThemes[0].label))) highlights.push({
+    text: `${frequentThemes[0].label}に関する記録が${frequentThemes[0].count}件ありました`,
+    href: '/weekly-review#wr-themes',
+  });
+  const successNotes = recentNotes.filter(isSuccess).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 5);
+  if (successNotes[0] && highlights.length < 3) highlights.push({
+    text: '良かった出来事が記録されています',
+    href: '/weekly-review#wr-success',
+  });
+  if (decisions[0] && highlights.length < 3) highlights.push({
+    text: `${decisions[0].title}という判断を記録しました`,
+    href: '/weekly-review#wr-decisions',
+  });
+  if (recentNotes.length && !highlights.length) highlights.push({
+    text: '記録した気づきを振り返れます',
+    href: '/weekly-review#wr-themes',
+  });
   const weekly: WeeklyReviewSummary = {
     from: from.toISOString(), through: now.toISOString(),
     entryCount: recentNotes.length + decisions.length,
     noteCount: recentNotes.length, decisionCount: decisions.length,
-    frequentThemes: relevantClusters.map(({ cluster, recent }) => theme(cluster, recent)).sort((a, b) => b.count - a.count).slice(0, 5),
-    recurringProblems: relevantClusters.map(({ cluster, recent }) => {
-      const problems = recent.filter(isIssue);
-      return problems.length >= 2 ? theme(cluster, problems) : null;
-    }).filter((value): value is ThemeInsight => value !== null).sort((a, b) => b.count - a.count).slice(0, 5),
-    positiveChanges: recentNotes.filter(isPositive).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 5),
-    decisions, unresolved,
-    manualCandidates: manualCandidates.filter(candidate => Date.parse(candidate.lastSeenAt) >= from.getTime()).slice(0, 5),
+    frequentThemes, recurringProblems,
+    positiveChanges: recentNotes.filter(isImprovement).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 5),
+    improvingChanges, worseningChanges,
+    decisions, decisionFollowups, directionSignals, unresolved,
+    successNotes,
+    manualCandidates: weeklyManualCandidates,
+    highlights: highlights.slice(0, 3),
   };
   return { weekly, patterns: buildPatterns(clusters, now), manualCandidates };
 }

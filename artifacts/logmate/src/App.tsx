@@ -7,6 +7,7 @@ import { jaJP } from '@clerk/localizations';
 import { BookOpen, CalendarDays, CalendarRange, ChartNoAxesColumn, Check, ChevronDown, ChevronRight, CircleHelp, Compass, Download, FileText, HardDrive, Lightbulb, LockKeyhole, LogOut, NotebookPen, PenLine, Plus, Search, Settings2, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
 import { useLogbook, CATEGORIES } from '@/lib/logbook';
 import { buildInsights } from '@/lib/insights';
+import { timelineFiltersHideTarget } from '@/lib/review-navigation';
 import WeeklyReview from '@/components/WeeklyReview';
 import PatternsDashboard from '@/components/PatternsDashboard';
 import DecisionReviewPanel from '@/components/DecisionReviewPanel';
@@ -102,7 +103,7 @@ function Heading({ index, title, subtitle, action }: { index: string; title: str
   return <div className="section-intro"><div><div className="eyebrow">{index} / LOGMATE JOURNAL</div><h1 className="page-title">{title}</h1><p className="page-subtitle">{subtitle}</p></div>{action}</div>;
 }
 function NoteRows({ notes, onEdit, onDelete }: { notes: Note[]; onEdit: (n: Note) => void; onDelete: (n: Note) => void }) {
-  return <div className="entry-list">{notes.map(note => <article className="entry" key={note.id} data-testid={`note-${note.id}`}>
+  return <div className="entry-list">{notes.map(note => <article className="entry" id={`note-${note.id}`} key={note.id} data-testid={`note-${note.id}`}>
     <time className="entry-date">{dateText(note.createdAt)}</time>
     <div className="entry-body-wrap"><p className="entry-body">{note.body}</p>{note.category && <span className="tag">{note.category}</span>}</div>
     <div className="entry-actions"><button className="icon-btn" aria-label="メモを編集" title="編集" data-testid={`button-edit-note-${note.id}`} onClick={() => onEdit(note)}><PenLine /></button><button className="icon-btn danger" aria-label="メモを削除" title="削除" data-testid={`button-delete-note-${note.id}`} onClick={() => onDelete(note)}><Trash2 /></button></div>
@@ -120,7 +121,7 @@ function TimelineEvents({ notes, decisions, onEditNote, onDeleteNote, onEditDeci
   ].sort((a, b) => Date.parse(b.item.createdAt) - Date.parse(a.item.createdAt));
   return <div className="entry-list">{events.map(event => event.type === 'note'
     ? <NoteRows key={event.item.id} notes={[event.item]} onEdit={onEditNote} onDelete={onDeleteNote}/>
-    : <article className="entry" key={event.item.id}>
+    : <article className="entry" id={`decision-${event.item.id}`} key={event.item.id}>
       <time className="entry-date">{dateText(event.item.createdAt)}</time>
       <div className="entry-body-wrap"><span className="tag">判断</span><p className="entry-body">{event.item.title}</p><p className="record-date">{event.item.reason}</p></div>
       <div className="entry-actions"><button className="icon-btn" aria-label="判断を編集" onClick={() => onEditDecision(event.item)}><PenLine/></button><button className="icon-btn danger" aria-label="判断を削除" onClick={() => onDeleteDecision(event.item)}><Trash2/></button></div>
@@ -162,6 +163,24 @@ function Journal({ userId }: { userId: string }) {
     const timer = window.setTimeout(() => setClock(Date.now()), delay);
     return () => window.clearTimeout(timer);
   }, [clock]);
+  useEffect(() => {
+    if (loading) return;
+    const scrollToSource = () => {
+      if (location === '/timeline' &&
+        timelineFiltersHideTarget(window.location.hash, data.notes, data.decisions, search, filter)) {
+        setSearch('');
+        setFilter('');
+        return;
+      }
+      let id: string;
+      try { id = decodeURIComponent(window.location.hash.slice(1)); }
+      catch { return; }
+      if (id) window.requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ block: 'center' }));
+    };
+    scrollToSource();
+    window.addEventListener('hashchange', scrollToSource);
+    return () => window.removeEventListener('hashchange', scrollToSource);
+  }, [location, loading, data, search, filter]);
   const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 3600); };
   const run = async (action: () => Promise<void>, success: string) => {
     setBusy(true);
@@ -210,14 +229,14 @@ function Journal({ userId }: { userId: string }) {
              <div className="today-grid"><section><div className="section-head"><div><div className="section-kicker">01 — CAPTURE</div><h2 className="section-title">今日、気づいたこと</h2></div><span className="section-hint">{dateText(new Date().toISOString())}</span></div>
               <form className="paper composer" onSubmit={submitMemo}><textarea data-testid="input-today-memo" value={memo} onChange={e=>setMemo(e.target.value)} placeholder="お客さんのひと言、試してみたこと、うまくいかなかったこと。何でも、ここに。" aria-label="今日のメモ"/><div className="composer-foot"><span className="select-wrap"><select data-testid="select-today-category" aria-label="カテゴリ" value={category} onChange={e=>setCategory(e.target.value)}><option value="">カテゴリなし</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><ChevronDown /></span><button className="btn btn-primary" data-testid="button-save-memo" disabled={!memo.trim() || savingMemo} type="submit"><Plus/>記録する</button></div></form>
             </section><aside className="side-note"><ShieldCheck className="small-icon" size={25} strokeWidth={1.5}/><h3>書くだけで、十分です。</h3><p>整った文章でなくても大丈夫。小さな違和感や発見が、あとから店の判断を支える材料になります。</p><div className="rule"><HardDrive size={14}/>メモはこの端末のみに保存されます</div></aside></div>
-             <section className="weekly-peek" data-testid="card-weekly-peek"><div><div className="section-kicker">THIS WEEK / FROM YOUR NOTES</div><h2>今週の気づき</h2><p data-testid="text-weekly-peek">{weekly.entryCount ? `直近7日間に ${weekly.entryCount} 件の記録。${weekly.frequentThemes[0] ? `よく現れた話題は「${weekly.frequentThemes[0].label}」です。` : '今週の記録を見返しましょう。'}` : '今週はまだ記録がありません。小さな気づきから始めましょう。'}</p></div><Link href="/weekly-review" className="btn btn-primary" data-testid="link-weekly-review">週次レビューを見る <ChevronRight size={16}/></Link></section>
+            <section className="weekly-peek" data-testid="card-weekly-peek"><div><div className="section-kicker">THIS WEEK / FROM YOUR NOTES</div><h2>今週の気づき</h2><p data-testid="text-weekly-peek">{weekly.entryCount ? `直近7日間に ${weekly.entryCount} 件の記録。記録から読み取れる手がかりです。` : '今週はまだ記録がありません。小さな気づきから始めましょう。'}</p>{weekly.highlights.length > 0 && <ul className="weekly-peek-highlights">{weekly.highlights.map(item => <li key={item.href}><Link href={item.href}>{item.text}<ChevronRight size={13} aria-hidden="true"/></Link></li>)}</ul>}</div><Link href="/weekly-review" className="btn btn-primary" data-testid="link-weekly-review">週次レビューを見る <ChevronRight size={16}/></Link></section>
              <section className="recent-section"><div className="section-head"><div><div className="section-kicker">RECENT ENTRIES</div><h2 className="section-title">最近の記録</h2></div><Link href="/timeline" className="text-link" data-testid="link-all-notes">すべて見る <ChevronRight size={14}/></Link></div>{notes.length ? <NoteRows notes={notes.slice(0,4)} onEdit={openNote} onDelete={n=>askDelete('note',n.id)}/> : <Empty icon={NotebookPen} title="まだ記録はありません" description="今日の気づきを一つ書くところから、あなたの店のログが始まります。"/>}</section>
           </>}</Route>
            <Route path="/timeline"><Heading index="02" title="記録をたどる" subtitle="日々の気づきと判断を、時系列で読み返せる場所。言葉やカテゴリで絞り込めます。"/><div className="toolbar"><div className="searchbox"><Search/><input data-testid="input-search-notes" type="search" placeholder="記録を検索" value={search} onChange={e=>setSearch(e.target.value)}/></div><span className="select-wrap"><select data-testid="select-filter-category" value={filter} onChange={e=>setFilter(e.target.value)} aria-label="カテゴリで絞り込む"><option value="">すべてのカテゴリ</option>{[...new Set([...CATEGORIES, ...notes.map(n=>n.category).filter(Boolean)])].map(c=><option key={c} value={c}>{c}</option>)}</select><ChevronDown/></span></div><div className="section-head"><h2 className="section-title">これまでの記録</h2><span className="section-hint">{filteredNotes.length + (filter ? 0 : decisions.filter(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())).length)} 件</span></div>{filteredNotes.length || (!filter && decisions.some(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))) ? <TimelineEvents notes={filteredNotes} decisions={filter ? [] : decisions.filter(d=>`${d.title} ${d.reason} ${d.outcome}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))} onEditNote={openNote} onDeleteNote={n=>askDelete('note',n.id)} onEditDecision={d=>setEditor({kind:'decision',id:d.id,initial:d})} onDeleteDecision={d=>askDelete('decision',d.id)}/> : <Empty icon={Search} title={notes.length || decisions.length?'該当する記録はありません':'まだ記録はありません'} description={notes.length || decisions.length?'検索する言葉やカテゴリを変えてみてください。':'今日のページで最初の気づきを記録しましょう。'} action={!notes.length && !decisions.length?<Link href="/" className="btn btn-primary" data-testid="link-first-note">今日のページへ</Link>:undefined}/>}</Route>
           <Route path="/patterns"><PatternsDashboard patterns={patterns} noteCount={notes.length}/></Route>
           <Route path="/decisions">
             <Heading index="04" title="判断の記録" subtitle="何を決め、なぜ決めたか。その後の記録と評価を時系列で残します。" action={<button className="btn btn-primary" data-testid="button-add-decision" onClick={()=>setEditor({kind:'decision'})}><Plus/>判断を記録</button>}/>
-            <div style={{marginTop:32}}>{decisions.length ? decisions.map(d=><article className="paper record-card" key={d.id} data-testid={`decision-${d.id}`}>
+            <div style={{marginTop:32}}>{decisions.length ? decisions.map(d=><article className="paper record-card" id={`decision-${d.id}`} key={d.id} data-testid={`decision-${d.id}`}>
               <div className="record-top"><div><h3 className="record-title">{d.title}</h3><p className="record-date">{dateText(d.createdAt)}</p></div><div className="record-toolbar"><button className="icon-btn" aria-label="判断を編集" data-testid={`button-edit-decision-${d.id}`} onClick={()=>setEditor({kind:'decision',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="判断を削除" data-testid={`button-delete-decision-${d.id}`} onClick={()=>askDelete('decision',d.id)}><Trash2/></button></div></div>
               <div className="record-field"><label>決めた理由</label><p>{d.reason || '理由はまだ記録されていません。'}</p></div>
               <div className="record-field"><label>その後の結果</label><p>{d.outcome || '結果はまだ記録されていません。あとから追記できます。'}</p></div>
@@ -228,7 +247,7 @@ function Journal({ userId }: { userId: string }) {
              <Heading index="05" title="店の向かう先" subtitle="大切にしたい価値観と、これから目指すこと。最近の行動と並べて見返せます。" action={<button className="btn btn-primary" data-testid="button-add-direction" onClick={()=>setEditor({kind:'direction'})}><Plus/>方針を追加</button>}/>
              <div className="direction-banner"><Compass/><div><strong>迷ったとき、ここに戻る。</strong><p>関係しそうな記録は、決めつけずに見比べるためのヒントです。</p></div></div>
              {directions.length ? <>
-               <div className="block-grid" style={{marginTop:0}}>{directions.map(d=><article className="paper record-card" style={{marginTop:0}} key={d.id} data-testid={`direction-${d.id}`}>
+              <div className="block-grid" style={{marginTop:0}}>{directions.map(d=><article className="paper record-card" id={`direction-${d.id}`} style={{marginTop:0}} key={d.id} data-testid={`direction-${d.id}`}>
                  <div className="record-top"><div><span className={`pill ${d.kind==='goal'?'goal':''}`}>{d.kind==='goal'?'目標':'大切にすること'}</span><h3 className="record-title">{d.title}</h3></div>
                    <div className="record-toolbar"><button className="icon-btn" aria-label="方針を編集" data-testid={`button-edit-direction-${d.id}`} onClick={()=>setEditor({kind:'direction',id:d.id,initial:d})}><PenLine/></button><button className="icon-btn danger" aria-label="方針を削除" data-testid={`button-delete-direction-${d.id}`} onClick={()=>askDelete('direction',d.id)}><Trash2/></button></div></div>
                  <div className="record-field"><p>{d.detail || '詳しい内容はまだありません。'}</p></div>
